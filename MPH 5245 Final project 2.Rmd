@@ -1,0 +1,516 @@
+---
+title: "Associations between food category, food setting, hospitalization rate and death rate among salmonella outbreaks in the United States, 1998 to 2017"
+output: html_notebook
+---
+################################################################################
+###Preparing R Studio for negative bionomial regression
+```{r}
+# Load MASS for negative bin
+library(MASS)
+# Load ggplot for graphing
+library(ggplot2)
+# Load lmtest library for coeftest
+library(lmtest)
+## Loading required package: zoo
+##
+## Attaching package: 'zoo'
+## The following objects are masked from 'package:base':
+##
+## as.Date, as.Date.numeric
+# Load sandwich library for robust estimator
+library(sandwich)
+2
+#load stargazer library to view a comparison of standard errors
+library(stargazer)
+
+install.packages("SMPracticals")
+library(SMPracticals)
+```
+
+###Importing data
+```{r}
+MPH.5245.Final.project.data <- read.csv("~/Desktop/MPH 5245 Final project data/MPH 5245 Final project data.csv")
+
+```
+
+
+###First, analysing the association between hospitalizations and food category
+
+###Preparing the dataset for the first analysis
+```{r}
+library(car)
+
+#Recoding blanks as "NA"
+MPH.5245.Final.project.data$IFSAC.Category[MPH.5245.Final.project.data$IFSAC.Category == ""]<-"NA"
+
+#Recoding the IFSAC categories into simpler food groups
+MPH.5245.Final.project.data$IFSAC.Category.Recoded<-recode(MPH.5245.Final.project.data$IFSAC.Category, "'Chicken'='Poultry'; 'Turkey'='Poultry'; 'Other Poultry'='Poultry'; 'Fish'='Seafood'; 'Crustaceans'='Seafood'; 'Fungi'='Vegetables & Related'; 'Grains-Beans'='Vegetables & Related'; 'Herbs'='Vegetables & Related'; 'Mollusks'='Seafood'; 'Nuts-Seeds'='Vegetables & Related'; 'Other Aquatic Animals'='Seafood'; 'Root/Underground'='Vegetables & Related'; 'Seeded Vegetables'='Vegetables & Related'; 'Vegetable Row Crops'='Vegetables & Related'; 'Game'='Other Meats'; 'Other Meat'='Other Meats'; 'Other'='Miscellaneous'; 'Unclassifiable'='Miscellaneous'; 'Multiple'='Miscellaneous'; 'Oils-Sugars'='Miscellaneous'")
+```
+
+###Preparing the offset
+```{r}
+#Collecting the relevant columns
+PreliminaryAggregateFoodCategoryIllnessesHospitalizations<-aggregate(MPH.5245.Final.project.data, by=list(MPH.5245.Final.project.data$IFSAC.Category.Recoded, MPH.5245.Final.project.data$Illnesses, MPH.5245.Final.project.data$Hospitalizations), FUN=mean, na.rm=TRUE)
+
+#Summing the number of illnesses by food category
+AggregateFoodCategoryIllnesses<-aggregate(PreliminaryAggregateFoodCategoryIllnessesHospitalizations$Group.2,  by=list(Category=PreliminaryAggregateFoodCategoryIllnessesHospitalizations$Group.1), FUN=sum)
+
+#Renaming the far-right column "Illnesses"
+colnames(AggregateFoodCategoryIllnesses)[2] <- 'Illnesses'   
+
+#Summing the number of hospitalizations by food category
+AggregateFoodCategoryHospitalizations<-aggregate(PreliminaryAggregateFoodCategoryIllnessesHospitalizations$Group.3,  by=list(Category=PreliminaryAggregateFoodCategoryIllnessesHospitalizations$Group.1), FUN=sum)
+
+#Renaming the far-right column "Hospitalizations"
+colnames(AggregateFoodCategoryHospitalizations)[2] <- 'Hospitalizations' 
+
+#Merging the three datasets together
+FinalAggregateFoodCategoryIllnessesHospitalizations <- merge(AggregateFoodCategoryIllnesses, AggregateFoodCategoryHospitalizations, by="Category")
+```
+
+###Running the poisson regression between food category and hospitalization
+```{r}
+PoissonFoodCategoryHospitalization <- glm(Hospitalizations ~ Category + offset(log(Illnesses)), family = poisson(link = "log"), data = FinalAggregateFoodCategoryIllnessesHospitalizations)
+
+#Presenting the results of the Poisson regression
+summary(PoissonFoodCategoryHospitalization)
+```
+
+###Retrieving dispersion parameter from quasi-poisson
+```{r}
+QuasiPoissonFoodCategoryHospitalization <- glm(Hospitalizations ~ Category + offset(log(Illnesses)), family = quasipoisson(link = "log"), data = FinalAggregateFoodCategoryIllnessesHospitalizations)
+summary(QuasiPoissonFoodCategoryHospitalization)
+```
+
+###Retrieving the rate ratios and 95% confidence intervals
+```{r}
+#Creating the function
+glm.RR <- function(GLM.RESULT, digits = 2) {
+
+    if (GLM.RESULT$family$family == "binomial") {
+        LABEL <- "OR"
+    } else if (GLM.RESULT$family$family == "poisson") {
+        LABEL <- "RR"
+    } else {
+        stop("Not logistic or Poisson model")
+    }
+
+    COEF      <- stats::coef(GLM.RESULT)
+    CONFINT   <- stats::confint(GLM.RESULT)
+    TABLE     <- cbind(coef=COEF, CONFINT)
+    TABLE.EXP <- round(exp(TABLE), digits)
+
+    colnames(TABLE.EXP)[1] <- LABEL
+
+    TABLE.EXP
+}
+
+#Exploiting the function
+glm.RR(PoissonFoodCategoryHospitalization, 3)
+
+#Results:
+#
+```
+
+###Using robust standard errors through the robust sandwich covariance estimator and assigning it to an object to calculate IRRs
+```{r}
+RobustFoodCategoryHospitalization<-coeftest(PoissonFoodCategoryHospitalization, vcov = sandwich)
+summary(RobustFoodCategoryHospitalization)
+```
+
+
+###Running the negative binomial regression
+```{r}
+NegativeBinomialFoodCategoryHospitalization<-glm.nb(Hospitalizations ~ Category + offset(log(Illnesses)), data = FinalAggregateFoodCategoryIllnessesHospitalizations)
+
+library(lmtest)
+
+lrtest(PoissonFoodCategoryHospitalization, NegativeBinomialFoodCategoryHospitalization)
+
+#Negative binomial did not work. Therefore, Poisson with robust standard errors should be used.
+```
+
+###Calculating IRRs for Poisson + Robust Standard Errors model
+```{r}
+IRRFoodCategoryHospitalization <- cbind(IRR = coef(PoissonFoodCategoryHospitalization), "2.5%"=RobustFoodCategoryHospitalization[,1]-1.96*RobustFoodCategoryHospitalization[,2], "97.5%"=RobustFoodCategoryHospitalization[,1]+1.96*RobustFoodCategoryHospitalization[,2])
+exp(IRRFoodCategoryHospitalization)
+
+exp(coef(PoissonFoodCategoryHospitalization))
+exp(confint(PoissonFoodCategoryHospitalization))
+
+#The incidence rate of hospitalizations for -- 
+# -- dairy-caused outbreaks is 1.30 times that of beef-related outbreaks. 
+# -- fruit-caused outbreaks is 1.48 times that of beef-related outbreaks. 
+# -- vegetable-caused outbreaks is 1.27 times that of beef-related outbreaks. 
+```
+
+################################################################################
+################################################################################
+
+###Second, let's analyse the association between deaths and food category
+
+###Preparing the offset
+```{r}
+#Collecting the relevant columns
+PreliminaryAggregateFoodCategoryIllnessesDeaths<-aggregate(MPH.5245.Final.project.data, by=list(MPH.5245.Final.project.data$IFSAC.Category.Recoded, MPH.5245.Final.project.data$Illnesses, MPH.5245.Final.project.data$Deaths), FUN=mean, na.rm=TRUE)
+
+#Summing the number of deaths by food category
+AggregateFoodCategoryDeaths<-aggregate(PreliminaryAggregateFoodCategoryIllnessesDeaths$Group.3,  by=list(Category=PreliminaryAggregateFoodCategoryIllnessesDeaths$Group.1), FUN=sum)
+
+#Renaming the far-right column "Deaths"
+colnames(AggregateFoodCategoryDeaths)[2] <- 'Deaths' 
+
+#Merging the three datasets together
+FinalAggregateFoodCategoryIllnessesDeaths <- merge(AggregateFoodCategoryIllnesses, AggregateFoodCategoryDeaths, by="Category")
+```
+
+###Running the poisson regression between food category and deaths
+```{r}
+PoissonFoodCategoryDeaths <- glm(Deaths ~ Category + offset(log(Illnesses)), family = poisson(link = "log"), data = FinalAggregateFoodCategoryIllnessesDeaths)
+
+#Presenting the results of the Poisson regression
+summary(PoissonFoodCategoryDeaths)
+```
+
+###Retrieving dispersion parameter from quasi-poisson
+```{r}
+QuasiPoissonFoodCategoryDeaths <- glm(Deaths ~ Category + offset(log(Illnesses)), family = quasipoisson(link = "log"), data = FinalAggregateFoodCategoryIllnessesDeaths)
+summary(QuasiPoissonFoodCategoryDeaths)
+```
+
+###Retrieving the rate ratios and 95% confidence intervals
+```{r}
+glm.RR(PoissonFoodCategoryDeaths, 3)
+
+#glm.RR did not work.
+
+exp(coef(PoissonFoodCategoryDeaths))
+
+#Not possible to find confidence intervals
+```
+
+###Using robust standard errors through the robust sandwich covariance estimator and assigning it to an object to calculate IRRs
+```{r}
+RobustFoodCategoryDeaths<-coeftest(PoissonFoodCategoryDeaths, vcov = sandwich)
+summary(RobustFoodCategoryDeaths)
+```
+
+###Running the negative binomial regression
+```{r}
+NegativeBinomialFoodCategoryDeaths<-glm.nb(Deaths ~ Category + offset(log(Illnesses)), data = FinalAggregateFoodCategoryIllnessesDeaths)
+
+lrtest(PoissonFoodCategoryDeaths, NegativeBinomialFoodCategoryDeaths)
+#P-value > 0.05. P-value does not improve model fit. Therefore, Poisson model should be used. 
+```
+
+###Calculating IRRs for Poisson + Robust Standard Errors model
+```{r}
+IRRFoodCategoryDeaths <- cbind(IRR = coef(PoissonFoodCategoryDeaths), "2.5%"=RobustFoodCategoryDeaths[,1]-1.96*RobustFoodCategoryDeaths[,2], "97.5%"=RobustFoodCategoryDeaths[,1]+1.96*RobustFoodCategoryDeaths[,2])
+exp(IRRFoodCategoryDeaths)
+
+exp(coef(PoissonFoodCategoryDeaths))
+exp(confint(PoissonFoodCategoryDeaths))
+
+#The incidence rate of deaths for -- 
+# -- fruit-caused outbreaks is 4.88 times that of beef-related outbreaks. 
+# -- vegetable-caused outbreaks is 2.63 times that of beef-related outbreaks. 
+# -- sprouts-caused outbreaks is 1.31 times that of beef-related outbreaks. 
+# -- seafood-caused outbreaks is 0.00 times that of beef-related outbreaks. 
+
+#Cannot find confidence intervals
+```
+
+################################################################################
+################################################################################
+################################################################################
+
+###Third, let's analyse the association between hospitalization and food setting
+
+###Recoding settings into simpler categories based on which one is dominant or 
+###comes first
+```{r}
+library(dplyr)
+
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Banquet Facility (food prepared and served on-site)"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Banquet Facility (food prepared and served on-site)"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Banquet Facility (food prepared and served on-site); Caterer (food prepared off-site from where served)"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Banquet Facility (food prepared and served on-site); Caterer (food prepared off-site from where served); Religious facility"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Banquet Facility (food prepared and served on-site); Other"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Camp"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Camp; Other"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Caterer (food prepared off-site from where served)"] <- "Catering"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Caterer (food prepared off-site from where served); Child day care"] <- "Catering"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Caterer (food prepared off-site from where served); Fair, festival, other temp or mobile services"] <- "Catering"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Caterer (food prepared off-site from where served); Fair, festival, other temp or mobile services; Grocery store"] <- "Catering"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Caterer (food prepared off-site from where served); Grocery store"] <- "Catering"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Caterer (food prepared off-site from where served); Grocery store; Other"] <- "Catering"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Caterer (food prepared off-site from where served); Other"] <- "Catering"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Caterer (food prepared off-site from where served); School/college/university"] <- "Catering"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Child day care"] <- "Educational Facility"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Fair, festival, other temp or mobile services"] <- "Mobile"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Fair, festival, other temp or mobile services; Grocery store"] <- "Mobile"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Farm/dairy"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Grocery store"] <- "Retail"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Grocery store; Office/indoor workplace"] <- "Retail"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Grocery store; Other"] <- "Retail"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Hospital"] <- "Health Care Facility"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Long-term care/nursing home/assisted living facility"] <- "Health Care Facility"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Long-term care/nursing home/assisted living facility; Hospital"] <- "Health Care Facility"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Long-term care/nursing home/assisted living facility; Other"] <- "Health Care Facility"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Office/indoor workplace"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Office/indoor workplace; Hospital"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Office/indoor workplace; Other"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Other"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Other; Unknown"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Prison/jail"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Banquet Facility (food prepared and served on-site)"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Banquet Facility (food prepared and served on-site); Caterer (food prepared off-site from where served)"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Banquet Facility (food prepared and served on-site); Other"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Caterer (food prepared off-site from where served)"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Caterer (food prepared off-site from where served); Grocery store"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Caterer (food prepared off-site from where served); Other"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Child day care"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Fair, festival, other temp or mobile services"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Fair, festival, other temp or mobile services; Grocery store"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Fair, festival, other temp or mobile services; Other"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Grocery store"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Grocery store; Child day care"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Grocery store; Long-term care/nursing home/assisted living facility"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Grocery store; Long-term care/nursing home/assisted living facility; School/college/university"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Grocery store; Other"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Grocery store; Religious facility"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Grocery store; Religious facility; Other"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Long-term care/nursing home/assisted living facility"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Office/indoor workplace"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Other"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; Religious facility"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Private home/residence; School/college/university"] <- "Residence"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Religious facility"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter)"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Grocery store"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Private home/residence"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Private home/residence; Grocery store"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Restaurant - Sit-down dining"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Restaurant - Sit-down dining; Fair, festival, other temp or mobile services"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Restaurant - Sit-down dining; Office/indoor workplace; Other"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Restaurant - Sit-down dining; Private home/residence"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Restaurant - Sit-down dining; Restaurant - other or unknown type"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Restaurant - Sit-down dining; Restaurant - other or unknown type; Grocery store; Office/indoor workplace"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Restaurant - Sit-down dining; Restaurant - other or unknown type; Private home/residence"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Restaurant - Sit-down dining; Restaurant - other or unknown type; Private home/residence; Grocery store; Long-term care/nursing home/assisted living facility; Camp"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Fast-food(drive up service or pay at counter); Restaurant - Sit-down dining='Restaurant'; School/college/university"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Buffet"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Banquet Facility (food prepared and served on-site)"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Caterer (food prepared off-site from where served)"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Caterer (food prepared off-site from where served); Fair, festival, other temp or mobile services"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Fair, festival, other temp or mobile services"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Grocery store"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Grocery store; Other"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Grocery store; School/college/university"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Hospital; School/college/university"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Long-term care/nursing home/assisted living facility"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Long-term care/nursing home/assisted living facility; Hospital"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Long-term care/nursing home/assisted living facility; Other"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Office/indoor workplace"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Office/indoor workplace; Hospital"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Other"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Prison/jail"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Banquet Facility (food prepared and served on-site); Grocery store"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Caterer (food prepared off-site from where served)"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Caterer (food prepared off-site from where served); Grocery store; Long-term care/nursing home/assisted living facility; Hospital"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Fair, festival, other temp or mobile services"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Fair, festival, other temp or mobile services"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Grocery store"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Grocery store; Long-term care/nursing home/assisted living facility; Other"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Grocery store; Other"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Grocery store; Unknown"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Hospital"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Private home/residence; Other"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Religious facility"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; School/college/university"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - other or unknown type; Unknown"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Banquet Facility (food prepared and served on-site)"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Caterer (food prepared off-site from where served)"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Caterer (food prepared off-site from where served); Religious facility"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Fair, festival, other temp or mobile services"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Grocery store"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Long-term care/nursing home/assisted living facility; Unknown"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Office/indoor workplace; School/college/university"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Other"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Private home/residence"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Private home/residence; Banquet Facility (food prepared and served on-site); Caterer (food prepared off-site from where served); Grocery store"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Private home/residence; Grocery store"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Private home/residence; Other"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Restaurant - Buffet"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Restaurant - other or unknown type; Private home/residence"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Restaurant - other or unknown type; Private home/residence; Banquet Facility (food prepared and served on-site); Caterer (food prepared off-site from where served)"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Restaurant - Sit-down dining; Unknown"] <- "Restaurant"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="School/college/university"] <- "Educational Facility"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="School/college/university; Other"] <- "Educational Facility"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting=="Unknown"] <- "Other"
+MPH.5245.Final.project.data$Setting.Recoded[MPH.5245.Final.project.data$Setting==""] <- "NA"
+```
+
+###Preparing the data
+```{r}
+#Collecting the relevant columns
+PreliminaryAggregateSettingIllnessesHospitalizations<-aggregate(MPH.5245.Final.project.data, by=list(MPH.5245.Final.project.data$Setting.Recoded, MPH.5245.Final.project.data$Illnesses, MPH.5245.Final.project.data$Hospitalizations), FUN=mean, na.rm=TRUE)
+
+#Summing the number of illnesses by setting
+AggregateSettingIllnesses<-aggregate(PreliminaryAggregateSettingIllnessesHospitalizations$Group.2,  by=list(Category=PreliminaryAggregateSettingIllnessesHospitalizations$Group.1), FUN=sum)
+
+#Renaming the far-right column "Illnesses"
+colnames(AggregateSettingIllnesses)[2] <- 'Illnesses'   
+
+#Summing the number of hospitalizations by food category
+AggregateSettingHospitalizations<-aggregate(PreliminaryAggregateSettingIllnessesHospitalizations$Group.3,  by=list(Category=PreliminaryAggregateSettingIllnessesHospitalizations$Group.1), FUN=sum)
+
+#Renaming the far-right column "Hospitalizations"
+colnames(AggregateSettingHospitalizations)[2] <- 'Hospitalizations' 
+
+#Merging the three datasets together
+FinalAggregateSettingIllnessesHospitalizations <- merge(AggregateSettingIllnesses, AggregateSettingHospitalizations, by="Category")
+
+#Renaming the far-left column "Setting"
+colnames(FinalAggregateSettingIllnessesHospitalizations)[1] <- 'Setting' 
+```
+
+###Running the poisson regression between setting and hospitalization
+```{r}
+#Running the poisson regression
+PoissonSettingHospitalization <- glm(Hospitalizations ~ Setting + offset(log(Illnesses)), family = poisson(link = "log"), data = FinalAggregateSettingIllnessesHospitalizations)
+
+#Presenting the results of the Poisson regression
+summary(PoissonSettingHospitalization)
+```
+
+###Retrieving dispersion parameter from quasi-poisson
+```{r}
+QuasiPoissonSettingHospitalization <- glm(Hospitalizations ~ Setting + offset(log(Illnesses)), family = quasipoisson(link = "log"), data = FinalAggregateSettingIllnessesHospitalizations)
+summary(QuasiPoissonSettingHospitalization)
+```
+
+###Retrieving the rate ratios and 95% confidence intervals
+```{r}
+#Exploiting the function
+glm.RR(PoissonSettingHospitalization, 3)
+```
+
+###Using robust standard errors through the robust sandwich covariance estimator and assigning it to an object to calculate IRRs
+```{r}
+RobustSettingHospitalization<-coeftest(PoissonSettingHospitalization, vcov = sandwich)
+summary(RobustSettingHospitalization)
+```
+
+###Running the negative binomial regression
+```{r}
+NegativeBinomialSettingHospitalization<-glm.nb(Hospitalizations ~ Setting + offset(log(Illnesses)), data = FinalAggregateSettingIllnessesHospitalizations)
+
+library(lmtest)
+
+lrtest(PoissonSettingHospitalization, NegativeBinomialSettingHospitalization)
+
+#P<0.05. P-value improves model fit. Therefore, the negative binomial model should be used.
+```
+
+###Calculating IRRs for Poisson + Robust Standard Errors model
+```{r}
+IRRSettingHospitalization <- cbind(IRR = coef(NegativeBinomialSettingHospitalization), "2.5%"=RobustSettingHospitalization[,1]-1.96*RobustSettingHospitalization[,2], "97.5%"=RobustSettingHospitalization[,1]+1.96*RobustSettingHospitalization[,2])
+exp(IRRSettingHospitalization)
+
+exp(coef(NegativeBinomialSettingHospitalization))
+exp(confint(NegativeBinomialSettingHospitalization))
+
+#The incidence rate of hospitalizations for -- 
+# -- outbreaks occurring in healthcare facilities is 2.37 times that of outbreaks occurring from catering. 
+# -- outbreaks occurring in residences is 2.44 times that of outbreaks occurring from catering.
+# -- outbreaks occurring in restaurants is 1.77 times that of outbreaks occurring from catering. 
+```
+
+################################################################################
+################################################################################
+################################################################################
+################################################################################
+
+###Finally, let's analyse the association between deaths and food setting
+
+###Preparing the offset
+```{r}
+#Collecting the relevant columns
+PreliminaryAggregateSettingIllnessesDeaths<-aggregate(MPH.5245.Final.project.data, by=list(MPH.5245.Final.project.data$Setting.Recoded, MPH.5245.Final.project.data$Illnesses, MPH.5245.Final.project.data$Deaths), FUN=mean, na.rm=TRUE)
+
+#Summing the number of deaths by food category
+AggregateSettingDeaths<-aggregate(PreliminaryAggregateSettingIllnessesDeaths$Group.3,  by=list(Category=PreliminaryAggregateSettingIllnessesDeaths$Group.1), FUN=sum)
+
+#Renaming the far-right column "Deaths"
+colnames(AggregateSettingDeaths)[2] <- 'Deaths' 
+
+#Merging the three datasets together
+FinalAggregateSettingIllnessesDeaths <- merge(AggregateSettingIllnesses, AggregateSettingDeaths, by="Category")
+
+#Renaming the far-left column "Setting"
+colnames(FinalAggregateSettingIllnessesDeaths)[1] <- 'Setting' 
+```
+
+###Running the poisson regression between setting and death
+```{r}
+#Running the poisson regression
+PoissonSettingDeath <- glm(Deaths ~ Setting + offset(log(Illnesses)), family = poisson(link = "log"), data = FinalAggregateSettingIllnessesDeaths)
+
+#Presenting the results of the Poisson regression
+summary(PoissonSettingDeath)
+```
+
+###Retrieving dispersion parameter from quasi-poisson
+```{r}
+QuasiPoissonSettingDeath <- glm(Deaths ~ Setting + offset(log(Illnesses)), family = quasipoisson(link = "log"), data = FinalAggregateSettingIllnessesDeaths)
+summary(QuasiPoissonSettingDeath)
+```
+
+###Retrieving the rate ratios and 95% confidence intervals
+```{r}
+#Exploiting the function
+glm.RR(PoissonSettingDeath, 3)
+
+exp(coef(PoissonSettingDeath))
+
+exp(confint(PoissonSettingDeath))
+
+#Confidence intervals cannot be found
+```
+
+###Using robust standard errors through the robust sandwich covariance estimator and assigning it to an object to calculate IRRs
+```{r}
+RobustSettingDeath<-coeftest(PoissonSettingDeath, vcov = sandwich)
+summary(RobustSettingDeath)
+```
+
+###Running the negative binomial regression
+```{r}
+NegativeBinomialSettingDeath<-glm.nb(Deaths ~ Setting + offset(log(Illnesses)), data = FinalAggregateSettingIllnessesDeaths)
+
+library(lmtest)
+
+lrtest(PoissonSettingDeath, NegativeBinomialSettingDeath)
+
+#P>0.05. P-value does not improve model fit. Therefore, the poisson model should be used.
+```
+
+###Calculating IRRs for Poisson + Robust Standard Errors model
+```{r}
+IRRSettingDeath <- cbind(IRR = coef(PoissonSettingDeath), "2.5%"=RobustSettingDeath[,1]-1.96*RobustSettingDeath[,2], "97.5%"=RobustSettingDeath[,1]+1.96*RobustSettingDeath[,2])
+exp(IRRSettingDeath)
+
+exp(coef(PoissonSettingDeath))
+exp(confint(PoissonSettingDeath))
+
+#The incidence rate of death for -- 
+# -- outbreaks occurring in healthcare facilities is 40.84 times that of outbreaks occurring from catering. 
+# -- outbreaks occurring in residences is 4.72 times that of outbreaks occurring from catering.
+# -- outbreaks occurring in retail is 4.78 times that of outbreaks occurring from catering.
+# -- outbreaks occurring in restaurants is 1.43 times that of outbreaks occurring from catering. 
+```
